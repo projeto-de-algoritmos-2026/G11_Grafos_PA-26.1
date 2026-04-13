@@ -1,9 +1,20 @@
+import cors from "cors";
 import express from "express";
 import { fetchGamaGraph } from "./overpass.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5174;
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
+    methods: ["GET"],
+  }),
+);
 
 let cachedGraph = null;
 let cacheExpiresAt = 0;
@@ -36,6 +47,7 @@ app.get("/api/graph/gama", async (_req, res) => {
       meta: {
         nodeCount: graph.nodes.length,
         edgeCount,
+        poiCount: graph.pois?.length ?? 0,
         generatedAt: new Date().toISOString(),
         cached: false,
       },

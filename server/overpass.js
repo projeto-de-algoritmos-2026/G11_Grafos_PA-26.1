@@ -10,6 +10,25 @@ const BASE_BACKOFF_MS = 600;
 const GAMA_BBOX = [-16.03, -48.095, -15.96, -48.03];
 const HIGHWAY_FILTER =
   "primary|secondary|tertiary|residential|unclassified|living_street";
+const POI_FILTERS = [
+  {
+    key: "amenity",
+    values:
+      "hospital|clinic|doctors|pharmacy|school|university|college|bus_station|marketplace|library|police|post_office|bank|restaurant|cafe|fast_food|fuel",
+  },
+  {
+    key: "shop",
+    values: "supermarket|convenience|mall|bakery|butcher|pharmacy",
+  },
+  {
+    key: "leisure",
+    values: "park|sports_centre|pitch|playground",
+  },
+  {
+    key: "public_transport",
+    values: "station|platform",
+  },
+];
 
 function addUndirectedEdge(adjacency, fromId, toId, distanceKm) {
   if (!adjacency.has(fromId)) {
@@ -140,8 +159,51 @@ function simplifyGraph(nodeMap, adjacency) {
 function buildGraphFromOverpass(data) {
   const nodeMap = new Map();
   const ways = [];
+  const pois = [];
+  const poiIds = new Set();
+
+  const getPoiLabel = (tags) =>
+    tags?.name || tags?.["name:pt"] || tags?.["name:en"];
+
+  const getPoiCategory = (tags) => {
+    if (!tags) return null;
+
+    for (const filter of POI_FILTERS) {
+      const value = tags[filter.key];
+      if (!value) continue;
+      if (new RegExp(`^(${filter.values})$`).test(value)) {
+        return filter.key;
+      }
+    }
+
+    return null;
+  };
+
+  const extractPoi = (element) => {
+    const label = getPoiLabel(element.tags);
+    const category = getPoiCategory(element.tags);
+    if (!label || !category) return null;
+
+    const lat = element.lat ?? element.center?.lat;
+    const lng = element.lon ?? element.center?.lon;
+    if (typeof lat !== "number" || typeof lng !== "number") return null;
+
+    return {
+      id: `${element.type}-${element.id}`,
+      label,
+      lat,
+      lng,
+      category,
+    };
+  };
 
   data.elements.forEach((element) => {
+    const poi = extractPoi(element);
+    if (poi && !poiIds.has(poi.id)) {
+      poiIds.add(poi.id);
+      pois.push(poi);
+    }
+
     if (element.type === "node") {
       if (typeof element.lat !== "number" || typeof element.lon !== "number") {
         return;
@@ -158,7 +220,8 @@ function buildGraphFromOverpass(data) {
   });
 
   const adjacency = buildAdjacency(ways, nodeMap);
-  return simplifyGraph(nodeMap, adjacency);
+  const graph = simplifyGraph(nodeMap, adjacency);
+  return { ...graph, pois };
 }
 
 async function fetchFromOverpass(url, query) {
@@ -209,6 +272,11 @@ function wait(ms) {
 }
 
 export async function fetchGamaGraph() {
+  const poiQuery = POI_FILTERS.map(
+    (filter) =>
+      `node["${filter.key}"~"${filter.values}"]["name"](${GAMA_BBOX.join(",")});\n  way["${filter.key}"~"${filter.values}"]["name"](${GAMA_BBOX.join(",")});`,
+  ).join("\n  ");
+
   const query = `
 [out:json][timeout:25];
 (
@@ -216,6 +284,10 @@ export async function fetchGamaGraph() {
 );
 (._;>;);
 out body;
+(
+  ${poiQuery}
+);
+out center;
 `;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {

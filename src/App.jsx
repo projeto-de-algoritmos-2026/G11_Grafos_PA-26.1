@@ -13,6 +13,10 @@ import { findShortestPath } from "./lib/dijkstra";
 import { findNearestNode } from "./lib/geo";
 import "./App.css";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(
+  /\/$/,
+  "",
+);
 const GAMA_BOUNDS = [
   [-16.03, -48.095],
   [-15.96, -48.03],
@@ -101,10 +105,13 @@ function App() {
   const [graph, setGraph] = useState(() => ({
     nodes: [],
     edges: {},
+    pois: [],
     source: "servidor",
   }));
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
+  const [startPoiId, setStartPoiId] = useState("");
+  const [endPoiId, setEndPoiId] = useState("");
   const [pickMode, setPickMode] = useState(null);
   const [loadState, setLoadState] = useState({
     status: "idle",
@@ -132,9 +139,19 @@ function App() {
       ),
     [graph.nodes],
   );
+  const pois = useMemo(() => graph.pois ?? [], [graph.pois]);
+  const poisById = useMemo(
+    () => new Map(pois.map((poi) => [poi.id, poi])),
+    [pois],
+  );
+  const hasPois = pois.length > 0;
   const allCoords = useMemo(
     () => nodesWithCoords.map((node) => [node.lat, node.lng]),
     [nodesWithCoords],
+  );
+  const poiCoords = useMemo(
+    () => pois.map((poi) => [poi.lat, poi.lng]),
+    [pois],
   );
   const hasGraph = graph.nodes.length > 0;
   const isLargeGraph = graph.nodes.length > 250;
@@ -144,7 +161,11 @@ function App() {
   useEffect(() => {
     if (!graph.nodes.length) return;
 
-    if (showSelects) {
+    if (hasPois) {
+      setStartPoiId(pois[0]?.id ?? "");
+      setEndPoiId(pois[1]?.id ?? "");
+      setPickMode(null);
+    } else if (showSelects) {
       setStartId(graph.nodes[0]?.id ?? "");
       setEndId(graph.nodes[1]?.id ?? "");
       setPickMode(null);
@@ -153,7 +174,27 @@ function App() {
       setEndId("");
       setPickMode("start");
     }
-  }, [graph.nodes, showSelects]);
+  }, [graph.nodes, showSelects, hasPois, pois]);
+
+  useEffect(() => {
+    if (!hasPois || !startPoiId) return;
+    const poi = poisById.get(startPoiId);
+    if (!poi) return;
+
+    const nearest = findNearestNode(nodesWithCoords, poi.lat, poi.lng);
+    if (!nearest) return;
+    setStartId(nearest.id);
+  }, [startPoiId, hasPois, nodesWithCoords, poisById]);
+
+  useEffect(() => {
+    if (!hasPois || !endPoiId) return;
+    const poi = poisById.get(endPoiId);
+    if (!poi) return;
+
+    const nearest = findNearestNode(nodesWithCoords, poi.lat, poi.lng);
+    if (!nearest) return;
+    setEndId(nearest.id);
+  }, [endPoiId, hasPois, nodesWithCoords, poisById]);
 
   const route = useMemo(() => {
     if (!hasGraph || !startId || !endId) {
@@ -214,8 +255,9 @@ function App() {
   const mapBounds = useMemo(() => {
     if (pathCoords.length > 1) return pathCoords;
     if (allCoords.length) return allCoords;
+    if (poiCoords.length) return poiCoords;
     return GAMA_BOUNDS;
-  }, [pathCoords, allCoords]);
+  }, [pathCoords, allCoords, poiCoords]);
   const mapNodes = useMemo(() => {
     if (!hasGraph) return [];
     if (!isLargeGraph) return nodesWithCoords;
@@ -224,11 +266,15 @@ function App() {
     );
   }, [nodesWithCoords, isLargeGraph, startId, endId, hasGraph]);
   const missingPoints = !hasGraph || !startId || !endId;
-  const startLabel = nodesById.get(startId)?.label ?? startId;
-  const endLabel = nodesById.get(endId)?.label ?? endId;
+  const startPoi = poisById.get(startPoiId);
+  const endPoi = poisById.get(endPoiId);
+  const startLabel =
+    startPoi?.label ?? nodesById.get(startId)?.label ?? startId;
+  const endLabel = endPoi?.label ?? nodesById.get(endId)?.label ?? endId;
   const isLoading = loadState.status === "loading";
 
   const handlePick = (mode, nodeId) => {
+    if (hasPois) return;
     if (mode === "start") {
       setStartId(nodeId);
       setPickMode("end");
@@ -243,7 +289,7 @@ function App() {
     setLoadState({ status: "loading", error: "" });
 
     try {
-      const response = await fetch("/api/graph/gama");
+      const response = await fetch(`${API_BASE_URL}/api/graph/gama`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -253,6 +299,7 @@ function App() {
       setGraph({
         nodes: data.nodes ?? [],
         edges: data.edges ?? {},
+        pois: data.pois ?? [],
         source: "servidor",
       });
       setLoadState({ status: "ready", error: "" });
@@ -292,6 +339,12 @@ function App() {
             <span className="stat-label">Arestas</span>
             <span className="stat-value">{edgeCount}</span>
           </div>
+          {hasPois ? (
+            <div className="hero-stat">
+              <span className="stat-label">POIs</span>
+              <span className="stat-value">{pois.length}</span>
+            </div>
+          ) : null}
           <div className="hero-stat">
             <span className="stat-label">Fonte</span>
             <span className="stat-value">Servidor</span>
@@ -306,57 +359,93 @@ function App() {
             <p className="panel-hint">Troque os pontos quando quiser.</p>
           </div>
 
-          <div className="field">
-            <label htmlFor="start">Origem</label>
-            {showSelects ? (
-              <select
-                id="start"
-                value={startId}
-                onChange={(event) => setStartId(event.target.value)}
-              >
-                {graph.nodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="node-pill">
-                {!hasGraph
-                  ? "Carregue o grafo do servidor"
-                  : startId
-                    ? startLabel
-                    : "Nao definido"}
+          {hasPois ? (
+            <>
+              <div className="field">
+                <label htmlFor="startPoi">Origem (POI)</label>
+                <select
+                  id="startPoi"
+                  value={startPoiId}
+                  onChange={(event) => setStartPoiId(event.target.value)}
+                >
+                  {pois.map((poi) => (
+                    <option key={poi.id} value={poi.id}>
+                      {poi.label}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
-          </div>
 
-          <div className="field">
-            <label htmlFor="end">Destino</label>
-            {showSelects ? (
-              <select
-                id="end"
-                value={endId}
-                onChange={(event) => setEndId(event.target.value)}
-              >
-                {graph.nodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="node-pill">
-                {!hasGraph
-                  ? "Carregue o grafo do servidor"
-                  : endId
-                    ? endLabel
-                    : "Nao definido"}
+              <div className="field">
+                <label htmlFor="endPoi">Destino (POI)</label>
+                <select
+                  id="endPoi"
+                  value={endPoiId}
+                  onChange={(event) => setEndPoiId(event.target.value)}
+                >
+                  {pois.map((poi) => (
+                    <option key={poi.id} value={poi.id}>
+                      {poi.label}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="start">Origem</label>
+                {showSelects ? (
+                  <select
+                    id="start"
+                    value={startId}
+                    onChange={(event) => setStartId(event.target.value)}
+                  >
+                    {graph.nodes.map((node) => (
+                      <option key={node.id} value={node.id}>
+                        {node.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="node-pill">
+                    {!hasGraph
+                      ? "Carregue o grafo do servidor"
+                      : startId
+                        ? startLabel
+                        : "Nao definido"}
+                  </div>
+                )}
+              </div>
 
-          {hasGraph && !showSelects ? (
+              <div className="field">
+                <label htmlFor="end">Destino</label>
+                {showSelects ? (
+                  <select
+                    id="end"
+                    value={endId}
+                    onChange={(event) => setEndId(event.target.value)}
+                  >
+                    {graph.nodes.map((node) => (
+                      <option key={node.id} value={node.id}>
+                        {node.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="node-pill">
+                    {!hasGraph
+                      ? "Carregue o grafo do servidor"
+                      : endId
+                        ? endLabel
+                        : "Nao definido"}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {hasGraph && !hasPois && !showSelects ? (
             <div className="pick-row">
               <button
                 type="button"
@@ -463,6 +552,22 @@ function App() {
                   </CircleMarker>
                 );
               })}
+              {pois.map((poi) => (
+                <CircleMarker
+                  key={poi.id}
+                  center={[poi.lat, poi.lng]}
+                  radius={7}
+                  pathOptions={{
+                    color: "#f4a259",
+                    fillColor: "#f4a259",
+                    fillOpacity: 0.9,
+                  }}
+                >
+                  <Tooltip direction="top" offset={[0, -8]} opacity={1}>
+                    {poi.label}
+                  </Tooltip>
+                </CircleMarker>
+              ))}
               <MapFitBounds bounds={mapBounds} />
               <MapClickHandler
                 activeMode={pickMode}
