@@ -6,24 +6,24 @@ import {
   TileLayer,
   Tooltip,
   useMap,
+  useMapEvents,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { nodes, edges } from "./data/graph";
 import { findShortestPath } from "./lib/dijkstra";
+import { findNearestNode } from "./lib/geo";
 import "./App.css";
 
-const nodesById = new Map(nodes.map((node) => [node.id, node]));
-const edgeCount = Math.round(
-  Object.values(edges).reduce((total, list) => total + list.length, 0) / 2,
-);
-const nodesWithCoords = nodes.filter(
-  (node) => typeof node.lat === "number" && typeof node.lng === "number",
-);
-const allCoords = nodesWithCoords.map((node) => [node.lat, node.lng]);
+const GAMA_BOUNDS = [
+  [-16.03, -48.095],
+  [-15.96, -48.03],
+];
 
 function centerFromCoords(coords) {
   if (!coords.length) {
-    return [-15.99, -48.06];
+    return [
+      (GAMA_BOUNDS[0][0] + GAMA_BOUNDS[1][0]) / 2,
+      (GAMA_BOUNDS[0][1] + GAMA_BOUNDS[1][1]) / 2,
+    ];
   }
 
   const { lat, lng } = coords.reduce(
@@ -37,11 +37,11 @@ function centerFromCoords(coords) {
   return [lat / coords.length, lng / coords.length];
 }
 
-function buildEdgeSegments() {
+function buildEdgeSegments(edgesMap, nodesById) {
   const seen = new Set();
   const segments = [];
 
-  Object.entries(edges).forEach(([from, list]) => {
+  Object.entries(edgesMap).forEach(([from, list]) => {
     list.forEach((edge) => {
       const key = [from, edge.to].sort().join("|");
       if (seen.has(key)) return;
@@ -74,48 +74,115 @@ function MapFitBounds({ bounds }) {
   return null;
 }
 
+function MapClickHandler({ activeMode, nodes, onPick }) {
+  useMapEvents({
+    click(event) {
+      if (!activeMode || nodes.length === 0) return;
+
+      const nearest = findNearestNode(
+        nodes,
+        event.latlng.lat,
+        event.latlng.lng,
+      );
+      if (!nearest) return;
+
+      onPick(activeMode, nearest.id);
+    },
+  });
+
+  return null;
+}
+
 function formatKm(value) {
   return value.toFixed(2);
 }
 
-function formatCost(value) {
-  return value.toFixed(2);
-}
-
 function App() {
-  const [startId, setStartId] = useState(nodes[0]?.id ?? "");
-  const [endId, setEndId] = useState(nodes[1]?.id ?? "");
-  const [useTraffic, setUseTraffic] = useState(true);
+  const [graph, setGraph] = useState(() => ({
+    nodes: [],
+    edges: {},
+    source: "servidor",
+  }));
+  const [startId, setStartId] = useState("");
+  const [endId, setEndId] = useState("");
+  const [pickMode, setPickMode] = useState(null);
+  const [loadState, setLoadState] = useState({
+    status: "idle",
+    error: "",
+  });
+
+  const nodesById = useMemo(
+    () => new Map(graph.nodes.map((node) => [node.id, node])),
+    [graph.nodes],
+  );
+  const edgeCount = useMemo(
+    () =>
+      Math.round(
+        Object.values(graph.edges).reduce(
+          (total, list) => total + list.length,
+          0,
+        ) / 2,
+      ),
+    [graph.edges],
+  );
+  const nodesWithCoords = useMemo(
+    () =>
+      graph.nodes.filter(
+        (node) => typeof node.lat === "number" && typeof node.lng === "number",
+      ),
+    [graph.nodes],
+  );
+  const allCoords = useMemo(
+    () => nodesWithCoords.map((node) => [node.lat, node.lng]),
+    [nodesWithCoords],
+  );
+  const hasGraph = graph.nodes.length > 0;
+  const isLargeGraph = graph.nodes.length > 250;
+  const showSelects = hasGraph && graph.nodes.length <= 200;
+  const mapCenter = useMemo(() => centerFromCoords(allCoords), [allCoords]);
+
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+
+    if (showSelects) {
+      setStartId(graph.nodes[0]?.id ?? "");
+      setEndId(graph.nodes[1]?.id ?? "");
+      setPickMode(null);
+    } else {
+      setStartId("");
+      setEndId("");
+      setPickMode("start");
+    }
+  }, [graph.nodes, showSelects]);
 
   const route = useMemo(() => {
-    if (!startId || !endId) {
-      return { path: [], segments: [], totalDistance: 0, totalCost: 0 };
+    if (!hasGraph || !startId || !endId) {
+      return { path: [], segments: [], totalDistance: 0 };
     }
 
-    const weightFn = (edge) =>
-      edge.distanceKm * (useTraffic ? edge.traffic : 1);
-    const result = findShortestPath({ edges, startId, endId, weightFn });
+    const weightFn = (edge) => edge.distanceKm;
+    const result = findShortestPath({
+      edges: graph.edges,
+      startId,
+      endId,
+      weightFn,
+    });
 
     const segments = [];
     let totalDistance = 0;
-    let totalCost = 0;
 
     for (let i = 0; i < result.path.length - 1; i += 1) {
       const from = result.path[i];
       const to = result.path[i + 1];
-      const edge = edges[from]?.find((item) => item.to === to);
+      const edge = graph.edges[from]?.find((item) => item.to === to);
 
       if (!edge) continue;
 
-      const cost = edge.distanceKm * (useTraffic ? edge.traffic : 1);
       totalDistance += edge.distanceKm;
-      totalCost += cost;
       segments.push({
         from,
         to,
         distanceKm: edge.distanceKm,
-        traffic: edge.traffic,
-        cost,
       });
     }
 
@@ -123,14 +190,16 @@ function App() {
       path: result.path,
       segments,
       totalDistance,
-      totalCost,
     };
-  }, [startId, endId, useTraffic]);
+  }, [startId, endId, graph.edges]);
 
-  const isSamePoint = startId === endId;
+  const isSamePoint = startId && endId && startId === endId;
   const hasRoute = route.path.length > 1;
-  const edgeSegments = useMemo(() => buildEdgeSegments(), []);
-  const mapCenter = useMemo(() => centerFromCoords(allCoords), []);
+  const edgeSegments = useMemo(() => {
+    if (!hasGraph) return [];
+    if (graph.nodes.length > 400) return [];
+    return buildEdgeSegments(graph.edges, nodesById);
+  }, [graph.edges, graph.nodes.length, nodesById, hasGraph]);
   const pathCoords = useMemo(
     () =>
       route.path
@@ -140,12 +209,60 @@ function App() {
           return [node.lat, node.lng];
         })
         .filter(Boolean),
-    [route.path],
+    [route.path, nodesById],
   );
-  const mapBounds = useMemo(
-    () => (pathCoords.length > 1 ? pathCoords : allCoords),
-    [pathCoords],
-  );
+  const mapBounds = useMemo(() => {
+    if (pathCoords.length > 1) return pathCoords;
+    if (allCoords.length) return allCoords;
+    return GAMA_BOUNDS;
+  }, [pathCoords, allCoords]);
+  const mapNodes = useMemo(() => {
+    if (!hasGraph) return [];
+    if (!isLargeGraph) return nodesWithCoords;
+    return nodesWithCoords.filter(
+      (node) => node.id === startId || node.id === endId,
+    );
+  }, [nodesWithCoords, isLargeGraph, startId, endId, hasGraph]);
+  const missingPoints = !hasGraph || !startId || !endId;
+  const startLabel = nodesById.get(startId)?.label ?? startId;
+  const endLabel = nodesById.get(endId)?.label ?? endId;
+  const isLoading = loadState.status === "loading";
+
+  const handlePick = (mode, nodeId) => {
+    if (mode === "start") {
+      setStartId(nodeId);
+      setPickMode("end");
+      return;
+    }
+
+    setEndId(nodeId);
+    setPickMode(null);
+  };
+
+  const handleLoadGraph = async () => {
+    setLoadState({ status: "loading", error: "" });
+
+    try {
+      const response = await fetch("/api/graph/gama");
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Falha ao carregar o grafo.");
+      }
+
+      setGraph({
+        nodes: data.nodes ?? [],
+        edges: data.edges ?? {},
+        source: "servidor",
+      });
+      setLoadState({ status: "ready", error: "" });
+    } catch (error) {
+      setLoadState({
+        status: "error",
+        error: error?.message ?? "Falha ao carregar o grafo.",
+      });
+    }
+  };
 
   const handleSwap = () => {
     setStartId(endId);
@@ -159,8 +276,7 @@ function App() {
           <p className="eyebrow">RoutenPlaner</p>
           <h1>Traço de Rota - Gama</h1>
           <p className="subtitle">
-            Escolha dois pontos do grafo e calcule a rota mais rapida. O trafego
-            entra como peso opcional.
+            Escolha dois pontos do grafo e calcule a rota mais rapida.
           </p>
           <div className="chip-row">
             <span className="chip">Dijkstra</span>
@@ -170,17 +286,15 @@ function App() {
         <div className="hero-card">
           <div className="hero-stat">
             <span className="stat-label">Nós</span>
-            <span className="stat-value">{nodes.length}</span>
+            <span className="stat-value">{graph.nodes.length}</span>
           </div>
           <div className="hero-stat">
             <span className="stat-label">Arestas</span>
             <span className="stat-value">{edgeCount}</span>
           </div>
           <div className="hero-stat">
-            <span className="stat-label">Peso</span>
-            <span className="stat-value">
-              {useTraffic ? "Distancia x trafego" : "Distancia"}
-            </span>
+            <span className="stat-label">Fonte</span>
+            <span className="stat-value">Servidor</span>
           </div>
         </div>
       </header>
@@ -194,46 +308,97 @@ function App() {
 
           <div className="field">
             <label htmlFor="start">Origem</label>
-            <select
-              id="start"
-              value={startId}
-              onChange={(event) => setStartId(event.target.value)}
-            >
-              {nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.label}
-                </option>
-              ))}
-            </select>
+            {showSelects ? (
+              <select
+                id="start"
+                value={startId}
+                onChange={(event) => setStartId(event.target.value)}
+              >
+                {graph.nodes.map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="node-pill">
+                {!hasGraph
+                  ? "Carregue o grafo do servidor"
+                  : startId
+                    ? startLabel
+                    : "Nao definido"}
+              </div>
+            )}
           </div>
 
           <div className="field">
             <label htmlFor="end">Destino</label>
-            <select
-              id="end"
-              value={endId}
-              onChange={(event) => setEndId(event.target.value)}
-            >
-              {nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.label}
-                </option>
-              ))}
-            </select>
+            {showSelects ? (
+              <select
+                id="end"
+                value={endId}
+                onChange={(event) => setEndId(event.target.value)}
+              >
+                {graph.nodes.map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="node-pill">
+                {!hasGraph
+                  ? "Carregue o grafo do servidor"
+                  : endId
+                    ? endLabel
+                    : "Nao definido"}
+              </div>
+            )}
           </div>
 
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={useTraffic}
-              onChange={(event) => setUseTraffic(event.target.checked)}
-            />
-            Usar fator de trafego
-          </label>
+          {hasGraph && !showSelects ? (
+            <div className="pick-row">
+              <button
+                type="button"
+                className={`pick-button ${pickMode === "start" ? "active" : ""}`}
+                onClick={() => setPickMode("start")}
+              >
+                Selecionar origem no mapa
+              </button>
+              <button
+                type="button"
+                className={`pick-button ${pickMode === "end" ? "active" : ""}`}
+                onClick={() => setPickMode("end")}
+              >
+                Selecionar destino no mapa
+              </button>
+            </div>
+          ) : null}
 
           <button className="swap" type="button" onClick={handleSwap}>
             Inverter origem e destino
           </button>
+
+          <div className="load-card">
+            <div>
+              <h3>Grafo do servidor</h3>
+              <p className="panel-hint">
+                O servidor baixa as ruas do Gama, simplifica e envia o grafo
+                pronto.
+              </p>
+            </div>
+            <button
+              className="load-button"
+              type="button"
+              onClick={handleLoadGraph}
+              disabled={isLoading}
+            >
+              {isLoading ? "Carregando..." : "Carregar grafo do Gama"}
+            </button>
+            {loadState.error ? (
+              <p className="error">{loadState.error}</p>
+            ) : null}
+          </div>
         </section>
 
         <section className="panel panel-map">
@@ -242,9 +407,19 @@ function App() {
             <p className="panel-hint">Clique nos pontos para ver os nomes.</p>
           </div>
           <div className="map-shell">
+            {pickMode ? (
+              <div className="map-overlay">
+                Clique no mapa para definir{" "}
+                {pickMode === "start" ? "origem" : "destino"}.
+              </div>
+            ) : null}
             <MapContainer
               center={mapCenter}
               zoom={13}
+              minZoom={12}
+              maxZoom={18}
+              maxBounds={GAMA_BOUNDS}
+              maxBoundsViscosity={0.9}
               scrollWheelZoom={false}
               className="map"
             >
@@ -265,7 +440,7 @@ function App() {
                   pathOptions={{ color: "#1e8e7c", weight: 4 }}
                 />
               )}
-              {nodesWithCoords.map((node) => {
+              {mapNodes.map((node) => {
                 const isStart = node.id === startId;
                 const isEnd = node.id === endId;
                 const color = isStart
@@ -289,6 +464,11 @@ function App() {
                 );
               })}
               <MapFitBounds bounds={mapBounds} />
+              <MapClickHandler
+                activeMode={pickMode}
+                nodes={nodesWithCoords}
+                onPick={handlePick}
+              />
             </MapContainer>
           </div>
         </section>
@@ -301,7 +481,11 @@ function App() {
             </span>
           </div>
 
-          {isSamePoint ? (
+          {!hasGraph ? (
+            <p className="empty">Carregue o grafo do servidor.</p>
+          ) : missingPoints ? (
+            <p className="empty">Selecione origem e destino.</p>
+          ) : isSamePoint ? (
             <p className="empty">Origem e destino iguais.</p>
           ) : !hasRoute ? (
             <p className="empty">Nao foi possivel encontrar rota.</p>
@@ -325,12 +509,6 @@ function App() {
                     {formatKm(route.totalDistance)} km
                   </span>
                 </div>
-                <div>
-                  <span className="stat-label">Custo ponderado</span>
-                  <span className="stat-value">
-                    {formatCost(route.totalCost)}
-                  </span>
-                </div>
               </div>
 
               <div className="segments">
@@ -342,8 +520,6 @@ function App() {
                     </div>
                     <div className="segment-meta">
                       <span>{formatKm(segment.distanceKm)} km</span>
-                      <span>trafego {segment.traffic.toFixed(2)}</span>
-                      <span>peso {formatCost(segment.cost)}</span>
                     </div>
                   </div>
                 ))}

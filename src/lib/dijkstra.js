@@ -1,69 +1,74 @@
-export function findShortestPath({ edges, startId, endId, weightFn }) {
-  const nodeIds = new Set(Object.keys(edges));
+export function findShortestPath({
+  edges: arestas,
+  startId: inicioId,
+  endId: fimId,
+  weightFn: pesoFn,
+}) {
+  const idsNos = new Set(Object.keys(arestas));
 
-  Object.values(edges).forEach((list) => {
-    list.forEach((edge) => {
-      nodeIds.add(edge.to);
+  Object.values(arestas).forEach((lista) => {
+    lista.forEach((aresta) => {
+      idsNos.add(aresta.to);
     });
   });
 
-  const unvisited = new Set(nodeIds);
-  const distances = {};
-  const previous = {};
+  const naoVisitados = new Set(idsNos);
+  const distancias = {};
+  const anterior = {};
 
-  nodeIds.forEach((nodeId) => {
-    distances[nodeId] = Number.POSITIVE_INFINITY;
+  idsNos.forEach((idNo) => {
+    distancias[idNo] = Number.POSITIVE_INFINITY;
   });
 
-  if (!nodeIds.has(startId) || !nodeIds.has(endId)) {
+  if (!idsNos.has(inicioId) || !idsNos.has(fimId)) {
     return { path: [], cost: Number.POSITIVE_INFINITY };
   }
 
-  distances[startId] = 0;
+  distancias[inicioId] = 0;
 
-  while (unvisited.size > 0) {
-    let current = null;
-    let smallest = Number.POSITIVE_INFINITY;
+  while (naoVisitados.size > 0) {
+    let atual = null;
+    let menor = Number.POSITIVE_INFINITY;
 
-    for (const nodeId of unvisited) {
-      if (distances[nodeId] < smallest) {
-        smallest = distances[nodeId];
-        current = nodeId;
+    for (const idNo of naoVisitados) {
+      if (distancias[idNo] < menor) {
+        menor = distancias[idNo];
+        atual = idNo;
       }
     }
 
-    if (current === null || smallest === Number.POSITIVE_INFINITY) {
+    if (atual === null || menor === Number.POSITIVE_INFINITY) {
       break;
     }
 
-    if (current === endId) {
+    if (atual === fimId) {
       break;
     }
 
-    unvisited.delete(current);
+    naoVisitados.delete(atual);
 
-    for (const edge of edges[current] ?? []) {
-      if (!unvisited.has(edge.to)) continue;
+    for (const aresta of arestas[atual] ?? []) {
+      if (!naoVisitados.has(aresta.to)) continue;
 
-      const candidate = distances[current] + weightFn(edge);
-      if (candidate < distances[edge.to]) {
-        distances[edge.to] = candidate;
-        previous[edge.to] = current;
+      const candidato = distancias[atual] + pesoFn(aresta);
+      if (candidato < distancias[aresta.to]) {
+        distancias[aresta.to] = candidato;
+        anterior[aresta.to] = atual;
       }
     }
   }
 
-  if (distances[endId] === Number.POSITIVE_INFINITY) {
+  if (distancias[fimId] === Number.POSITIVE_INFINITY) {
     return { path: [], cost: Number.POSITIVE_INFINITY };
   }
 
-  const path = [];
-  let cursor = endId;
+  const caminho = [];
+  let cursor = fimId;
 
   while (cursor !== undefined) {
-    path.unshift(cursor);
-    cursor = previous[cursor];
+    caminho.unshift(cursor);
+    cursor = anterior[cursor];
   }
 
-  return { path, cost: distances[endId] };
+  return { path: caminho, cost: distancias[fimId] };
 }

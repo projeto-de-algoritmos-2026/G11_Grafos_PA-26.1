@@ -132,6 +132,21 @@
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--bg-soft);
+  position: relative;
+}
+
+.map-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 500;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: var(--shadow-soft);
 }
 
 .map {
@@ -166,6 +181,15 @@
   color: var(--ink);
 }
 
+.node-pill {
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  font-weight: 600;
+  color: var(--ink);
+}
+
 select {
   border-radius: 12px;
   border: 1px solid var(--border);
@@ -193,6 +217,34 @@ select:focus-visible {
   accent-color: var(--accent);
 }
 
+.pick-row {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.pick-button {
+  border-radius: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.pick-button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.pick-button.active {
+  border-color: var(--accent);
+  background: rgba(30, 142, 124, 0.08);
+}
+
 .swap {
   width: 100%;
   border-radius: 12px;
@@ -210,6 +262,51 @@ select:focus-visible {
 .swap:hover {
   transform: translateY(-1px);
   box-shadow: var(--shadow-soft);
+}
+
+.load-card {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px dashed var(--border);
+  background: var(--bg-soft);
+  display: grid;
+  gap: 12px;
+}
+
+.load-card h3 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.load-button {
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.load-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.load-button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.error {
+  margin: 0;
+  color: #a4311f;
+  font-weight: 600;
 }
 
 .badge {
